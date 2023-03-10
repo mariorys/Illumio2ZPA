@@ -42,14 +42,14 @@ Script flow
 Instructions: 
 
 edit config files  
-zpa_config.json 
-            customer_id
-            url
-            apiroot (usually “mgmtconfig/”) 
-            client_id & client_secret (as per ZPA API config)
-            adminConsumers (legycy, to be removed)
+ zpa_config.json 
+             customer_id
+             url
+             apiroot (usually “mgmtconfig/”) 
+             client_id & client_secret (as per ZPA API config)
+             adminConsumers (legycy, to be removed)
 
-and il_config.json 
+ il_config.json 
             api_user / api_key from Illumio API User
             api_node   PCE Hostname
             api_orgid   Illumio ORG ID
@@ -67,4 +67,4 @@ and il_config.json
             IPLCleanUpName remove fqdns from inside applications to not overflow ZPA, mainly for devices that are not used to connect to remotely anyway ["laptop%","desktop%"]
             IPLCleanUpNameRegex regex to remove fqdns from inside applications to not overflow ZPA, mainly for devices that are not used to connect to remotely anyway ":["^[0-9]+.domain.local"]
 
-the dns_config.json file is automatically generated on first launch as it holds the password of a service user that is required to access authenticated LDAP.
+ dns_config.json file is automatically generated on first launch as it holds the password of a service user that is required to access authenticated LDAP.
