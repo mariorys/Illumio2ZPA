@@ -27,8 +27,10 @@ IPL: IP lists in Illumio
  
  
  naming convention: names are automatically prepended in ZPA
+ ```
             Illumio workload “IL_”
             Illumio IPL “IPL_”
+ ```
 
 Script flow
 
