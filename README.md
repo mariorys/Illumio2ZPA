@@ -24,7 +24,9 @@ WL: Workload in Illumio
 IPL: IP lists in Illumio
  
  This tool heavily relies on proper naming conventions, as example for IPLs would be IPL-CC-SiteName-BusinessUnit[-more granular-identifier]
-Side note: naming convention: names are automatically prepended in ZPA
+ 
+ 
+ naming convention: names are automatically prepended in ZPA
             Illumio workload “IL_”
             Illumio IPL “IPL_”
 
