@@ -1,4 +1,5 @@
 # illumio2ZPA
+![overview](overview.png)
 
 Treat Illumio as source of truth for creating / updating the list of applications in ZPA which are then used to allow access to these applications remotely.
  Applications are created on ZPA based on the scope in a rule with the rule-name in Ilumio as well as applications per “interesting IP List” to allow IP based access – in addition to circumvent the missing DNS resolution of IP addresses forwareded into ZPA tunnel the local AD DNS is dumped and mapped accordingly to the workload and IPL data. 
