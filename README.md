@@ -2,7 +2,7 @@
 ![overview](overview.png)
 
 Treat Illumio as source of truth for creating / updating the list of applications in ZPA which are then used to allow access to these applications remotely.
- Applications are created on ZPA based on the scope in a rule with the rule-name in Ilumio as well as applications per “interesting IP List” to allow IP based access. Zscaler Private Access allows access to ressources via IP and host names (FQDN), the latter is the peferred way. DNS requests are intercepted and IP is obfiscated that no direct fqdn -> IP relation is available on ZPA "application" level if the fqdn is not present. To circumvent the this, the local AD DNS is dumped and mapped accordingly to the workload and IPL data. Additional filtering is applied to remove unwanted FQDN entries before uploading to ZPA to not clutter their "applications"
+ Applications are created on ZPA based on the scope in a rule with the rule-name in Ilumio as well as applications per “interesting IP List” to allow IP based access. Zscaler Private Access allows access to ressources via IP and host names (FQDN), the latter is the peferred way. DNS requests are intercepted and tehir internal IP is obfuscated. No direct fqdn -> IP relation is available on ZPA "application" level if the fqdn is not present there. To circumvent the this, the local AD DNS is dumped and mapped accordingly to the workload and IPL data. Additional filtering is applied to remove unwanted FQDN entries before uploading to ZPA to not clutter their "applications"
 
       0.9  ignore "active FTP highport exclusion rules from 1024-65535" - hardcoded in illumio_api
  
