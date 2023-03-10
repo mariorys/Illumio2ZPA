@@ -17,7 +17,7 @@ Treat Illumio as source of truth for creating / updating the list of application
        
       0.93 fixed error checkOverlappingPorts where the last Port in the list was omitted
 
-# illumio2ZPA
+#
 Note:
 
 WL: Workload in Illumio
