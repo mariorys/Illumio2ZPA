@@ -221,7 +221,7 @@ class IllumioApi:
 
     def LookupIPL(self,ip):
         cursor=self.inMemSQLconn.cursor()
-        sqlIPL="select ip,name from IPL"
+        sqlIPL="select ip,name from IPL order by ip asc"
         IPLs=cursor.execute(sqlIPL)
         prevMask=0
         site=None
@@ -229,7 +229,7 @@ class IllumioApi:
             if ipaddress.ip_address(ip) in ipaddress.ip_network(IPL[0]):
                 n = ipaddress.ip_network(IPL[0])
                 mask=int(n.netmask)
-                if mask >prevMask:
+                if mask > prevMask:
                     site=IPL[1]
         return site
 
@@ -840,6 +840,8 @@ class IllumioApi:
                         rule['consumers']['labels'].remove(None)
                     ZscalerWantedConsumers=[]
                     for i in rule['consumers']['labels']:
+                        if i == None:
+                            continue
                         for wanted in self.CONFIG['ZscalerWantedConsumers']:
                              if wanted in i:
                                 SHOW=True

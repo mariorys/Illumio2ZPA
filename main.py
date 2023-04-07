@@ -7,14 +7,18 @@
 # in addition to circumvent the missing DNS resolution of internal IP addresses the local AD DNS is dumped and mapped accordingly to the workload and IPL data. 
 # Additional filtering is applied to remove unwanted FQDN entries before uploading to ZPA.
 #
-# 0.9  ignore "active FTP highport exclusion rules from 1024-65535" - hardcoded in illumio_api
-#      minor bugfixes
-#      major speed improvements if we have to retry an IPL update / insert
-# 0.91 optimized service port additions / updates: identify and remove overlaps, convert output to ranges [ port 3301,3302,3303, 2998-3302 -> 2998-3303 ]
-# 0.92 copy the ZPA ruleset as CSV for documentation purposes (only app and SAML attribute)
-#      add logging to a file
-# 0.93 fixed error checkOverlappingPorts where the last Port in the list was omitted
-# 
+# 0.9   ignore "active FTP highport exclusion rules from 1024-65535" - hardcoded in illumio_api
+#       minor bugfixes
+#       major speed improvements if we have to retry an IPL update / insert
+# 0.91  optimized service port additions / updates: identify and remove overlaps, convert output to ranges [ port 3301,3302,3303, 2998-3302 -> 2998-3303 ]
+# 0.92  copy the ZPA ruleset as CSV for documentation purposes (only app and SAML attribute)
+#       add logging to a file
+# 0.93  fixed error checkOverlappingPorts where the last Port in the list was omitted
+# 0.94  added "SpecialIPLs" in il_config.json that allows an IPL being treated differently still allowing al the DNS magic
+#       fixup dnsdump, DNS name handling improved to just return FQDNs.
+#       fix "none" issue when iterating Scopes
+#       logging improvement
+#       added error -1 in restFlyHandler when http message cannot be decoded
 # 
 
 
@@ -121,12 +125,21 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
     if zpa==None:
         zpa = ZPA(client_id=zpa_CONFIG['client_id'], client_secret=zpa_CONFIG['client_secret'], customer_id=zpa_CONFIG['customer_id'])
     
-    if zpa_segmentgroupList==False:
-        zpa_servergroupList=zpa.server_groups.list_groups()
-    if zpa_app_segments==False:
-        zpa_app_segments=zpa.app_segments.list_segments()
-    if zpa_segmentgroupList==False:
-        zpa_segmentgroupList=zpa.segment_groups.list_groups()
+    while zpa_servergroupList==False:
+        try:
+            zpa_servergroupList=zpa.server_groups.list_groups()
+        except:
+            printNLog("\tRETRY: zpa.server_groups.list_groups()")
+    while zpa_app_segments==False:
+        try:
+            zpa_app_segments=zpa.app_segments.list_segments()
+        except:
+            printNLog("\tRETRY: zpa.app_segments.list_segments()")
+    while zpa_segmentgroupList==False:
+        try:
+            zpa_segmentgroupList=zpa.segment_groups.list_groups()
+        except:
+            printNLog("\tRETRY: zpa.segment_groups.list_groups()")
 
     for rule in rules:
 
@@ -218,6 +231,7 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
                         tcp_ports=tcp_ports_add,
                         udp_ports=udp_ports_add,
                         description=r_cons,
+                        icmp_access_type='PING',
                         server_group_ids=[server_group_ids])
                 printNLog ("\tDone")#, sleeping "+str(sleeptime)+" seconds not to overload ZPA")
                 time.sleep(sleeptime)
@@ -226,7 +240,7 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
                 if retVal != None:
                     for app_segment in zpa_app_segments:
                         if retVal['retry'].lower().strip() == app_segment['name'].lower().strip() and len(app_segment['domain_names'])>0 :
-                            printNLog ("Removing IPs/ranges of "+app_segment['name']+" ")
+                            printNLog ("\tRemoving IPs/ranges of "+app_segment['name']+" ")
                             newIPList=[]
                             for new in r_prov:
                                 skip=False
@@ -254,6 +268,7 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
                     tcp_ports=tcp_ports_update,
                     udp_ports=udp_ports_update,
                     description=r_cons,
+                    icmp_access_type='PING',
                     server_group_ids=[server_group_ids])
                 #eprintNLog (update_segment)
                 printNLog ("\tDone")#, sleeping "+str(sleeptime)+" seconds not to overload ZPA")
@@ -262,7 +277,7 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
                 if retVal != None:
                     for app_segment in zpa_app_segments:
                         if retVal['retry'].lower().strip() == app_segment['name'].lower().strip() and len(app_segment['domain_names'])>0:
-                            printNLog ("Removing IPs/ranges of "+app_segment['name']+" ")
+                            printNLog ("\tRemoving IPs/ranges of "+app_segment['name']+" ")
                             newIPList=[]
                             for new in r_prov:
                                 skip=False
@@ -367,9 +382,14 @@ def ZPA_addIPL():
         matches=match.match(row[0])
         if matches: #and 'IPL-ZA' in row[0]
             tmp=matches.groups()
-            if tmp[3] and tmp[3].upper()=='OT':
-                IPLName=tmp[0]+'-'+tmp[1]+'-'+tmp[2]+'-'+tmp[3]
-            else:
+            specialName=False
+            for SpecialIPL in il.CONFIG['SpecialIPLs']:
+                #print(SpecialIPL)
+                if tmp[3]:
+                    if tmp[3].upper().startswith("-"+SpecialIPL.upper()):
+                        specialName=True
+                        IPLName=tmp[0]+'-'+tmp[1]+'-'+tmp[2]+''+tmp[3]
+            if not specialName==True:
                 IPLName=tmp[0]+'-'+tmp[1]+'-'+tmp[2]
             if not IPLName in IPLs:
                 IPLs[IPLName]=[]
@@ -382,8 +402,6 @@ def ZPA_addIPL():
                     pass
             if skipIP==False:
                     IPLs[IPLName].append(row[1])
-
-
     for IPL in IPLs:
         if len(IPLs[IPL]) > 0:
             ZPA_addItem([IPL,IPLs[IPL],IPL])
@@ -479,7 +497,7 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
             if retVal != None:
                 for app_segment in zpa_app_segments:
                     if retVal['retry'].lower().strip() == app_segment['name'].lower().strip() and len(app_segment['domain_names'])>0 :
-                        printNLog ("Removing IPs/ranges of "+app_segment['name']+" ")
+                        printNLog ("\tRemoving IPs/ranges of "+app_segment['name']+" ")
                         newIPList=[]
                         for new in r_prov:
                             skip=False
@@ -488,7 +506,7 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
                                 #if str(new.strip(),"ascii") == str(existing.strip(), "ascii") :
                                 if new == existing:
                                     skip=True
-                                    printNLog (existing,end=", ")
+                                    printNLog ("\t skip "+existing)
                             if skip==False:
                                 newIPList.append(new)
                         printNLog ("\n retrying")
@@ -497,7 +515,7 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
                         rule=tuple(l_tmp)
                         ZPA_addItem(rule,DefaultServerGroupCC,DefaultServerGroupName,ContainerName,sleeptime,True)
                         return
-            printNLog (ZPA_AppName,r_prov,segment_group_id,tcp_ports_add,udp_ports_add,r_cons,server_group_ids)
+            printNLog (str(ZPA_AppName)+","+str(r_prov)+","+str(segment_group_id)+","+str(tcp_ports_add)+","+str(udp_ports_add)+","+str(r_cons)+","+str(server_group_ids))
         except restfly.errors.ForbiddenError:
             ZPA_addItem(rule,DefaultServerGroupCC,DefaultServerGroupName,ContainerName,sleeptime,True)
         except restfly.errors.TooManyRequestsError:
@@ -524,7 +542,7 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
             if retVal != None:
                 for app_segment in zpa_app_segments:
                     if retVal['retry'].lower().strip() == app_segment['name'].lower().strip() and len(app_segment['domain_names'])>0 :
-                        printNLog ("Removing IPs/ranges of "+app_segment['name']+" ")
+                        printNLog ("\tRemoving IPs/ranges of "+app_segment['name']+" ")
                         newIPList=[]
                         skipped=False
                         for new in r_prov:
@@ -545,7 +563,7 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
                         if skipped==True:
                             ZPA_addItem(rule,DefaultServerGroupCC,DefaultServerGroupName,ContainerName,sleeptime,True)
                         return
-            printNLog (ZPA_AppName,len(r_prov),r_prov,segment_group_id,tcp_ports_update,udp_ports_update,r_cons,server_group_ids,True)
+            printNLog (str(ZPA_AppName)+","+str(len(r_prov))+","+str(r_prov)+","+str(segment_group_id)+","+str(tcp_ports_update)+","+str(udp_ports_update)+","+str(r_cons)+","+str(server_group_ids)+","+str(True))
         except restfly.errors.ForbiddenError:
             ZPA_addItem(rule,DefaultServerGroupCC,DefaultServerGroupName,ContainerName,sleeptime,True)
 
@@ -559,7 +577,12 @@ def restFlyHandler(err):
         body=m.group(4)
         body = decode(encode(body, 'latin-1', 'backslashreplace'), 'unicode-escape').replace('\\n','\n').replace("'","")
 
-        message=json.loads(body)
+        try:
+            message=json.loads(body)
+        except:
+            print (body)
+            message['id']='-1'
+            message['reason']='Error in restFlyHandler'
         return handleRestIssues(message['id'],message['reason'])
 
 def handleRestIssues(id,reason):
@@ -634,6 +657,7 @@ def getDNSData(minAmount=10000):
     outfile.write('type,name,value\n')
     for zone in zones:
         records=dns.read(zone=zone,resolve=True,dns_tcp=False)
+        #print (records)
         for r in records:
             outfile.write('{type},{name},{value}\n'.format(**r))
             if r['name'] != '@' and not '._sites' in r['name'] and not '._tcp' in r['name'] and not '._udp' in r['name'] and not 'dnszones.' in r['name']:
@@ -790,7 +814,6 @@ def main():
     
     ZPA_addAppPerRule(rules)
     ZPA_addIPL()
-    
     ZPA_GetPolicy()
 
 

@@ -478,13 +478,23 @@ class dnsdump:
                 if verbose:
                     self.print_o('Found record %s' % targetentry['attributes']['name'])
 
+            if '@' in recordname:
+                continue
+
+            if not recordname.endswith(".") and zone not in recordname:
+                recordname=recordname+"."+zone
+            if recordname.endswith("."):
+                recordname=recordname[:-1]
+
+            
+
             # Skip tombstoned records unless requested
             if targetentry['attributes']['dNSTombstoned'] and not include_tombstoned:
                 continue
 
             for record in targetentry['raw_attributes']['dnsRecord']:
                 dr = DNS_RECORD(record)
-                # dr.dump()
+                #dr.dump()
                 # print targetentry['dn']
                 if debug:
                     self.print_record(dr, targetentry['attributes']['dNSTombstoned'])
