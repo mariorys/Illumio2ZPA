@@ -364,7 +364,7 @@ class dnsdump:
                 self.password = getpass.getpass()
         
 
-    def read(self,zone=None,forest=False,legacy=False,return_zones=False,include_tombstoned=False,verbose=False ,referralhosts=None,resolve=False,debug=False,dns_tcp=False):
+    def read(self,zone=None,forest=False,legacy=False,return_zones=False,include_tombstoned=False,verbose=False ,referralhosts=None,resolve=False,debug=False,dns_tcp=False,DNSServerIPPublic='8.34.34.34',isPubZone=False):
         #parser = argparse.ArgumentParser(description='Query/modify DNS records for Active Directory integrated DNS via LDAP')
         #parser._optionals.title = "Main options"
         #parser._positionals.title = "Required options"
@@ -513,17 +513,29 @@ class dnsdump:
 
                 continue
         #self.print_o('Found %d records' % len(outdata))
+        #prepare variables
         returnData=[]
+        DNSServerIPSik=self.DNSServerIP
+        self.DNSServerIP=DNSServerIPPublic
+        #iterate throug all records and check if public available for a pulbic zone
         for data in outdata:
+            publicToo=False
+            if isPubZone:
+                resp=self.resolveName(verbose,data['name'].lower(), '', dns_tcp,publicDNS=True)
+                if resp != None:
+                    #print (resp)
+                    if resp['value'] == data['value']:
+                        publicToo=True
             #returnData.append([data[0].lower(),data[1],data[3]])
-            returnData.append({'name':data['name'].lower(), 'type':data['type'], 'value': data['value']})
+            returnData.append({'name':data['name'].lower(), 'type':data['type'], 'value': data['value'],'publicToo':publicToo})
+        self.DNSServerIP=DNSServerIPSik
         return returnData
         #with codecs.open('records.csv', 'w', 'utf-8') as outfile:
         #    outfile.write('type,name,value\n')
         #    for row in outdata:
         #        outfile.write('{type},{name},{value}\n'.format(**row))
 
-    def resolveName(self,verbose,recordname, zone,dns_tcp):
+    def resolveName(self,verbose,recordname, zone,dns_tcp,publicDNS=False):
         #build retries in maybe
         dnsresolver = self.get_dns_resolver(self.DNSServerIP)
         #try:
@@ -534,22 +546,24 @@ class dnsdump:
         try:
             res = dnsresolver.query(queryString, 'A', tcp=dns_tcp, raise_on_no_answer=False)
         except dns.name.EmptyLabel as e:
-            self.print_o ("skipping empty Label")
-            #print (queryString)
+            if publicDNS==False:
+                self.print_o ("\t@"+self.DNSServerIP+":empty Label:"+queryString)
             return None
         except dns.resolver.NXDOMAIN as e:
-            self.print_o ("skipping NXDOMAIN "+queryString)
+            if publicDNS==False:
+                self.print_o ("\t@"+self.DNSServerIP+":NXDOMAIN:"+queryString)
             return None
-
-        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.Timeout, ) as e:
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.Timeout, dns.resolver.NoNameservers) as e:
             #if verbose:
-            self.print_f(str(e))
+            if publicDNS==False:
+                self.print_f(str(e))
             #self.print_m('Could not resolve node %s (%s)' % recordname, e)
             #return {'name':recordname, 'type':'?', 'value': '?'}
             return None
 
         if len(res.response.answer) == 0:
-            self.print_m('Could not resolve node %s (probably no A record assigned to name)' % queryString)
+            if publicDNS==False:
+                self.print_m('Could not resolve node %s (probably no A record assigned to name)' % queryString)
             return {'name':queryString, 'type':'?', 'value': '?'}
         if verbose:
             self.print_o('Resolved hidden record %s' % queryString)

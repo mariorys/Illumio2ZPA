@@ -31,14 +31,16 @@ import os
 class IllumioApi:
     CACHE={}
     
-    def __init__(self,config,DEBUGSQL=False):
+    def __init__(self,config,DEBUGSQL=False,offline=False):
         self.DEBUGSQL=DEBUGSQL
+        self.DEBUGSQL = True
         if self.DEBUGSQL == True:
             #keep a copy of the old DB, make sure all old data is gone
-            if os.path.exists("illumio-prev.db"):
-                os.remove("illumio-prev.db")
-            if os.path.exists("illumio.db"):
-                os.rename("illumio.db","illumio-prev.db")
+            if offline == False:
+                if os.path.exists("illumio-prev.db"):
+                    os.remove("illumio-prev.db")
+                if os.path.exists("illumio.db"):
+                    os.rename("illumio.db","illumio-prev.db")
             self.inMemSQLconn=sqlite3.connect('illumio.db')
         else:
             self.inMemSQLconn=sqlite3.connect(':memory:')
@@ -49,10 +51,10 @@ class IllumioApi:
         self.WorkloadTableCreate()
         self.IplTableCreate()
         self.DNSTableCreate()
-        self.TableClean()
-
-        self.WorkloadTableFill()
-        self.IplTableFill()
+        if offline == False:
+            self.TableClean()
+            self.WorkloadTableFill()
+            self.IplTableFill()
     
     def TableClean(self):
         cursor=self.inMemSQLconn.cursor()
@@ -71,7 +73,8 @@ class IllumioApi:
             CREATE TABLE IF NOT EXISTS dns (
                     name text,
                     ip text,
-                    site text
+                    site text,
+                    mask int
                     )
         """
         cursor.execute(table)
@@ -212,10 +215,13 @@ class IllumioApi:
         cursor.execute(table)
 
     def DNSTableFill(self,ARecords,NoneBut=False):
-        sql="insert into dns (name, ip ) VALUES (?,?)"
+        sql="insert into dns (name, ip) VALUES (?,?)"
         cursor=self.inMemSQLconn.cursor()
         for record in ARecords:
-            cursor.execute(sql,record)
+            #print (record)
+            if record[2]==False:
+                cursor.execute(sql,[record[0],record[1]])
+
         cursor.execute('commit')
         self.DNSTableFillUp(NoneBut)
 
@@ -239,37 +245,73 @@ class IllumioApi:
 
     def DNSTableFillUp(self,NoneBut=False):
         cursor=self.inMemSQLconn.cursor()
-        sqlDNSUpdate='update DNS set site=? where IP= ?'
+        sqlDNSUpdate='update DNS set site=? , mask = ? where IP= ?'
+        sqlDNSInsert='insert into DNS (site,IP,name,mask) values (?,?,?,?)'
         sqlDNS="select name,ip from DNS order by ip"
+        sqlDNSCleanEmpty="delete from dns where site is NULL"
 
+        match = re.compile("^(IPL-\w\w)-([a-zA-Z0-9_/ ]+)-([a-zA-Z0-9/_ ]+)(-(.*))?")
+        
+        
         cursor.execute(sqlDNS)
         rows=cursor.fetchall()
 
+        sqlCleanUp="delete from dns where name = ?"
         for cleanUpNameRegex in self.CONFIG['IPLCleanUpNameRegex']:
             regex=re.compile(cleanUpNameRegex)
-
             for row in rows:
                 if regex.match(row[0]):
-                    sqlCleanUp="delete from DNS where name = ?"
                     cursor.execute(sqlCleanUp,[row[0]])
-        #cursor.execute('commit')
-        #exit()
+            
         
         if NoneBut != False:
             sqlDNS="delete from ipl where name not like ?"
             cursor.execute(sqlDNS,NoneBut)
 
+        sqlIPL="select lower(ip),name from ipl where ip  GLOB '*[A-Za-z]*' and name like 'IPL-%' order by ip asc"
+        cursorLookup=self.inMemSQLconn.cursor()
+        IPLs=cursorLookup.execute(sqlIPL)
+        for IPL in IPLs: 
+            cursor.execute(sqlCleanUp,[IPL[0]])
 
+        cursor.execute(sqlDNS)
+        rows=cursor.fetchall()
         if self.dnsIPL==True:
             prefix='Looking up IP in IPL'
             l=len(rows)
             i=0
             self.printProgressBar(i,l, prefix=prefix, suffix='Complete', length=50)
             for row in rows:
+                ip=row[1]
+                name=row[0]
                 i+=1
                 self.printProgressBar(i,l, prefix=prefix, suffix='Complete', length=50)
-                site=self.LookupIPL(row[1])
-                cursor.execute(sqlDNSUpdate,[site,row[1]])
+
+                #site=self.LookupIPL(row[1])
+                #IPL lookup
+                cursorLookup=self.inMemSQLconn.cursor()
+                #sqlIPL="select ip,name from IPL order by ip asc"
+                sqlIPL="select ip,name from ipl where ip not GLOB '*[A-Za-z]*' and name like 'IPL-%' order by ip asc"
+                IPLs=cursorLookup.execute(sqlIPL)
+                prevMask=0
+                site=None
+                for IPL in IPLs:
+                    if ipaddress.ip_address(ip) in ipaddress.ip_network(IPL[0]):
+                        n = ipaddress.ip_network(IPL[0])
+                        mask=int(n.netmask)
+                        if mask >= prevMask:
+                            site=IPL[1]
+                            #matches=match.match(site)
+                            matches=match.findall(site)
+                            if len(matches) > 0:
+                                if len(matches[0][4]) > 0: # length of the 5th found item matching the name
+                                    for specialIPL in self.CONFIG['SpecialIPLs']:
+                                        if specialIPL in matches[0][3]:
+                                            #print ("\n\tYAY\n")
+                                            cursor.execute(sqlDNSInsert,[site,ip,name,mask])                                          
+                                else:
+                                    #cursor.execute(sqlDNSUpdate,[site,ip])
+                                    cursor.execute(sqlDNSInsert,[site,ip,name,self.count_set_bits(mask)])
             
         
         #ipls
@@ -293,6 +335,12 @@ class IllumioApi:
         if self.dnsWL==True:
             prefix=prefix+'workloads '
         i=0
+
+        for cleanUpName in self.CONFIG['IPLCleanUpName']:
+            sqlCleanUp="delete from dns where lower(name) like lower(?)"
+            cursor.execute(sqlCleanUp,[cleanUpName])
+
+            
         self.printProgressBar(i,l, prefix=prefix, suffix='Complete', length=50)
         for row in rows:
             i+=1
@@ -311,9 +359,72 @@ class IllumioApi:
             sqlCleanUp="delete from ipl where lower(ip) like lower(?)"
             cursor.execute(sqlCleanUp,[cleanUpName])
 
-
-            
+        #for cleanUpNameRegex in self.CONFIG['IPLCleanUpNameRegex']:
+        #    regex=re.compile(cleanUpNameRegex)
+        #    for row in rows:
+        #        if regex.match(row[0]):
+        #            sqlCleanUp="delete from ipl where lower(name) = lower(?)"
+        #            #print ("deleting "+row[0])
+        #            cursor.execute(sqlCleanUp,[row[0]])
+        #cleanup empty entries
+        cursor.execute(sqlDNSCleanEmpty)
+        #save to db
         cursor.execute('commit')
+        self.DNS_IPL_BestMatch()
+        #exit()
+
+    def count_set_bits(self,n):
+        count = 0
+        while n:
+            n &= n - 1
+            count += 1
+        return count
+
+
+    def DNS_IPL_BestMatch(self):
+        cursor=self.inMemSQLconn.cursor()
+        cursor2=self.inMemSQLconn.cursor()
+        sqlDnsDupes="""
+                    select name from dns 
+    	            group by name,ip
+	                having count(1) > 1
+                    order by name asc, mask desc, site
+                    """
+        sqlDnsRecordByName="select rowid,* from dns where name = ?"
+        
+        cursor.execute(sqlDnsDupes)
+        DnsDupesRows=cursor.fetchall()
+        
+        deleteRecord=[]
+        for DnsDupesRow in DnsDupesRows:
+            cursor2.execute(sqlDnsRecordByName,DnsDupesRow)
+            DnsRows=cursor2.fetchall()
+            mask=0
+            PrevRowid=-1
+            PrevSite=""
+            for DnsRow in DnsRows:
+                #print (DnsRow)
+                if DnsRow[4] >= mask:
+                    if PrevRowid > -1:
+                        if len(DnsRow[3]) >= len (PrevSite):
+                            deleteRecord.append(PrevRowid)
+                        else:
+                            deleteRecord.append(DnsRow[0])
+
+                    mask=DnsRow[4]
+                    PrevRowid=DnsRow[0]
+                    PrevSite=DnsRow[3]
+                else:
+                    deleteRecord.append(DnsRow[0])
+        
+        changeDone=False
+        sqlDnsRecordByRowid="delete from dns where rowid = ?"
+        for item in deleteRecord:
+            cursor.execute(sqlDnsRecordByRowid,[item])
+            changeDone=True
+        
+        if changeDone:
+            cursor.execute('commit')
 
     def IplTableFill(self):
         cursor=self.inMemSQLconn.cursor()
@@ -324,7 +435,10 @@ class IllumioApi:
                 for ips in ipls[ipl]['ip_ranges']:
                     if ips['exclusion']==False:
                         cursor.execute(sqlIPL,[ipls[ipl]['name'],ips['from_ip']])
-        
+                for ips in ipls[ipl]['fqdns']:
+                    cursor.execute(sqlIPL,[ipls[ipl]['name'],ips['fqdn']])
+
+
     def IplTableQuery(self,scope):
         cursor=self.inMemSQLconn.cursor()
         sql="select * from ipl where "
@@ -882,7 +996,7 @@ class IllumioApi:
         #sql="select distinct name || IIF(adminrule==0,'','_admin'), group_concat(DISTINCT provider_ip) as provider_ip, group_concat(DISTINCT consumer_name) as consumer_name, group_concat(DISTINCT port ||','|| proto) as port, adminrule from rules group by name, adminrule"
         #sql="select distinct name || case when adminrule==0 then '' else '_admin' end, group_concat(DISTINCT provider_ip) as provider_ip, group_concat(DISTINCT consumer_name) as consumer_name, group_concat(DISTINCT port ||','|| to_port ||','|| proto) as port, adminrule from rules group by name, adminrule"
         # ignore "FTP highport exclusion rules from 1024-65535"
-        sql="select distinct name || case when adminrule==0 then '' else '_admin' end, group_concat(DISTINCT provider_ip) as provider_ip, group_concat(DISTINCT consumer_name) as consumer_name, group_concat(DISTINCT port ||','|| to_port ||','|| proto) as port, adminrule from rules where not (port = 1024 and to_port = 65535) group by name, adminrule"
+        sql="select distinct name || case when adminrule==0 then '' else '_admin' end, group_concat(DISTINCT provider_ip) as provider_ip, group_concat(DISTINCT consumer_name) as consumer_name, group_concat(DISTINCT port ||','|| to_port ||','|| proto) as port, adminrule from rules where not (port = 1024 and to_port = 65535) group by name, adminrule order by name desc"
         rows=cursor.execute(sql)
         for row in rows:
             returnList.append(row)

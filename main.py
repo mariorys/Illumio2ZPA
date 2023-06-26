@@ -14,13 +14,17 @@
 # 0.92  copy the ZPA ruleset as CSV for documentation purposes (only app and SAML attribute)
 #       add logging to a file
 # 0.93  fixed error checkOverlappingPorts where the last Port in the list was omitted
-# 0.94  added "SpecialIPLs" in il_config.json that allows an IPL being treated differently still allowing al the DNS magic
+# 0.94  added "SpecialIPLs" in il_config.json that allows an IPL being treated differently still allowing all the DNS magic
 #       fixup dnsdump, DNS name handling improved to just return FQDNs.
 #       fix "none" issue when iterating Scopes
 #       logging improvement
 #       added error -1 in restFlyHandler when http message cannot be decoded
-# 
-
+# 0.94  fixup multiple IPLs matching at DNS mapping
+#       added "publicZones" to config, domains to look for public published fqdns to skip from adding.
+# 0.95  re-lookup CNAMEs that might be nested or were unresolved for whatever reason before
+# 0.96  optimized "special IPL" & dns cleanup code
+#       added FQDNs to collect from Illumio in IPls, these take precedence over learned / resolved IPs - these are remove before the mapping sequence
+# 0.97  hashed out "nearest app connector" logic as it reduces redundancy if the app connector(s) fail or site admins get creative
 
 import json
 from urllib import response
@@ -100,11 +104,8 @@ def flatten(d,sep="_"):
     recurse(d)
 
     return obj
-def IL_getRuleset(ARecords,DEBUGSQL=False,dnsIPL=True,dnsWL=True):
+def IL_getRuleset(ARecords,PublicDNSRecords=[],DEBUGSQL=False,dnsIPL=True,dnsWL=True,config={}):
     global il
-    with open('il_config.json') as f:
-        config = json.load(f)
-
 
     il=IllumioApi(config,DEBUGSQL=DEBUGSQL)
     il.dnsIPL=dnsIPL
@@ -156,8 +157,8 @@ def ZPA_addAppPerRule(rules,DefaultServerGroupCC='AT',DefaultServerGroupName='Dy
             if DefaultServerGroupCC==server_group['app_connector_groups'][0]['country_code']:
                 if DefaultServerGroupName == server_group['name']:
                     server_group_ids=server_group['id']
-            if server_group['app_connector_groups'][0]['country_code'] in r_name:
-                server_group_ids=server_group['id']
+            #if server_group['app_connector_groups'][0]['country_code'] in r_name:
+            #    server_group_ids=server_group['id']
 
         ZPA_AppName='Il_'+r_name
 
@@ -441,8 +442,8 @@ def ZPA_addItem(rule,DefaultServerGroupCC='AT',DefaultServerGroupName='Dynamic_P
         if DefaultServerGroupCC==server_group['app_connector_groups'][0]['country_code']:
             if DefaultServerGroupName == server_group['name']:
                 server_group_ids=server_group['id']
-        if server_group['app_connector_groups'][0]['country_code'] in r_name:
-            server_group_ids=server_group['id']
+        #if server_group['app_connector_groups'][0]['country_code'] in r_name:
+        #    server_group_ids=server_group['id']
 
     ZPA_AppName='Il_'+r_name
     ZPA_AppName=re.sub(r'[^A-Za-z0-9 _-]',' ', ZPA_AppName).strip()
@@ -580,6 +581,7 @@ def restFlyHandler(err):
         try:
             message=json.loads(body)
         except:
+            message={}
             print (body)
             message['id']='-1'
             message['reason']='Error in restFlyHandler'
@@ -601,6 +603,8 @@ def handleRestIssues(id,reason):
         printNLog (reason)
     elif id == 'tcp.portrange.invalid':
         printNLog (reason)
+    elif id == 'invalid.toomanyrequests':
+        printNLog (reason)
     else:
         printNLog (id)
         printNLog (reason)
@@ -618,10 +622,10 @@ def removeUnwantedZones(zones):
     return cleanUpZones
 
 
-def getDNSDataConfig(invalidateConfigg=False):
+def getDNSDataConfig(invalidateConfig=False):
     
     CONFIGFILE='dns_config.json'
-    if os.path.exists(CONFIGFILE) and invalidateConfigg==False:
+    if os.path.exists(CONFIGFILE) and invalidateConfig==False:
         with open(CONFIGFILE) as f:
             config = json.load(f)
             cipher_suite = Fernet(config['cipher_key'])
@@ -644,7 +648,7 @@ def getDNSDataConfig(invalidateConfigg=False):
         
         return config
 
-def getDNSData(minAmount=10000):
+def getDNSData(minAmount=10000,publicZones=[]):
     config=getDNSDataConfig()
 
     dns=dnsdump(host=config['host'],user=config['user'],password=config['password'],DNSServerIP=config['DNSServerIP'])
@@ -654,47 +658,69 @@ def getDNSData(minAmount=10000):
     Ahash={}
     CRecords=[]
     outfile = codecs.open('records.csv', 'w', 'utf-8')
-    outfile.write('type,name,value\n')
+    outfile.write('type,name,value,inet\n')
     for zone in zones:
-        records=dns.read(zone=zone,resolve=True,dns_tcp=False)
-        #print (records)
+        isPubZone=False
+        for pubZone in publicZones:
+            if pubZone == zone:
+                isPubZone=True
+        records=dns.read(zone=zone,resolve=True,dns_tcp=False,isPubZone=isPubZone)
         for r in records:
-            outfile.write('{type},{name},{value}\n'.format(**r))
+            outfile.write('{type},{name},{value},{publicToo}\n'.format(**r))
             if r['name'] != '@' and not '._sites' in r['name'] and not '._tcp' in r['name'] and not '._udp' in r['name'] and not 'dnszones.' in r['name']:
                 if r['type'] == 'A':
                     if r['name'][-1] == '.':
-                        ARecords.append([r['name'][0:-1],r['value']])
+                        ARecords.append([r['name'][0:-1],r['value'],r['publicToo']])
                     elif zone in r['name']:
-                        ARecords.append([r['name'],r['value']])
+                        ARecords.append([r['name'],r['value'],r['publicToo']])
                     else:
-                        ARecords.append([r['name']+'.'+zone,r['value']])
+                        ARecords.append([r['name']+'.'+zone,r['value'],r['publicToo']])
                 if r['type'] == 'CNAME':
                     if r['name'][-1] == '.':
-                        CRecords.append([r['name'][0:-1],r['value']])
+                        CRecords.append([r['name'][0:-1],r['value'],r['publicToo']])
                     elif zone in r['name']:
-                        CRecords.append([r['name'],r['value']])
+                        CRecords.append([r['name'],r['value'],r['publicToo']])
                     else:
-                        CRecords.append([r['name']+'.'+zone,r['value']])
+                        CRecords.append([r['name']+'.'+zone,r['value'],r['publicToo']])
     for A in ARecords:
         Ahash[A[0]]=A[1].lower()
 
     PrevLen=0
     while len(CRecords) > 0 and len(CRecords) != PrevLen:
+
         PrevLen=len(CRecords)
         retryCname=[]
         for CNAME in CRecords:
             if CNAME[1][-1] == '.':
                 CNAME[1]=CNAME[1][0:-1]
             try:
-                ARecords.append([CNAME[0],Ahash[CNAME[1]].lower()])
+                ARecords.append([CNAME[0],Ahash[CNAME[1]].lower(),r['publicToo']])
             except:
-                printNLog ("retry for CNAME "+CNAME[0])
-                retryCname.append(CNAME)
+                printNLog ("\tretry for CNAME "+CNAME[0])
+
+                isCNAME=True
+                while isCNAME:
+                    #print (CNAME)
+                    response=dns.resolveName(False, CNAME[1], '', False,publicDNS=False)
+                    if response!= None:
+                        #print (response)
+                        if response['type']=='A':
+                            isCNAME=False
+                        else:
+                            isCNAME=True
+                            CNAME[1]=response['value']
+                    else:
+                        retryCname.append(CNAME)
+                        break
+                if isCNAME==False:
+                    ARecords.append([CNAME[0],response['value'],r['publicToo']])
         CRecords=retryCname
     
     if len(ARecords) < minAmount:
         printNLog ("amount of DNS records below expected value of "+str(minAmount))
         exit()
+    #print (ARecords)
+    #exit()
     return ARecords
 
 def ZPA_GetPolicy(type="access",sleeptime=0.1):
@@ -719,18 +745,23 @@ def ZPA_GetPolicy(type="access",sleeptime=0.1):
         csvRow['name']=policy.name
         csvRow['rule_order']=policy.rule_order
         csvRow['operator']=policy.operator
+        csvRow['APP']=[]
+        csvRow['SAML']=[]
+        csvRow['POSTURE']=[]
         for condition in policy.conditions:
-            csvRow['APP']=[]
-            csvRow['SAML']=[]
+            #print (condition)
             for operand in condition.operands:
+                #print (operand)
                 if operand.object_type == 'APP':
                     csvRow['APP'].append(operand.object_type+'='+operand.name)
                 if operand.object_type == 'SAML':
                     csvRow['SAML'].append(operand.name+'='+operand.rhs)
+                if operand.object_type == 'POSTURE':
+                    csvRow['POSTURE'].append(operand.name+'='+operand.rhs)
         csv.append(csvRow)
     timestr = time.strftime("%Y%m%d-%H%M")
     
-    csvWriter('policy-'+str(timestr)+'.csv',csv)
+    csvWriter('policy/policy-'+str(timestr)+'.csv',csv)
 
 def csvWriter(fname,dict):
     with open(fname, 'w', newline='',  encoding='utf-8') as csv_data:
@@ -803,14 +834,18 @@ def main():
     DEBUGSQL=True
     MinAmountDnsRecords=10000
 
-    #print (checkOverlappingPorts([[1550,1552],[3257,3257],[3256,3256],[3255,3255],[3254,3254],[3253,3253],[3252,3252],[3250,3250],[3251,3251],[3260,3262],[3350,3357],[4852,4852],[4851,4851],[4850,4850],[4854,4854],[4855,4855],[4856,4856],[8050,8057],[7450,7457],[3950,3950],[3952,3952],[3650,3652],[8150,8152],[8250,8252],[50013,59814],[3289,3289],[3254,3254],[3256,3256],[3252,3252],[3255,3255],[3355,3355],[3352,3352],[3356,3356],[3354,3354],[4852,4852],[8054,8054],[8056,8056],[8052,8052],[8055,8055],[7455,7455],[7452,7452],[7456,7456],[7454,7454],[3650,3650],[3662,3662],[8050,8050],[8162,8162],[7450,7450],[8262,8262],[31241,31242],[51213,51213],[55513,55513],[55213,55213],[55613,55613],[55413,55413],[51214,51214],[55514,55514],[55214,55214],[55614,55614],[55414,55414],[31213,31213],[31215,31215]]))
-    #exit()
+#    ARecords=getDNSData(MinAmountDnsRecords,publicZones=['mondigroup.com','mondipackaging.com'])
+#    print (ARecords)
+#    exit()
+    with open('il_config.json') as f:
+        config = json.load(f)
+
     if DEBUG:
         ARecords=[]
-        rules=IL_getRuleset(ARecords,DEBUGSQL,dnsIPL=False,dnsWL=False)
+        rules=IL_getRuleset(ARecords,DEBUGSQL,dnsIPL=False,dnsWL=False,config=config)
     else:
-        ARecords=getDNSData(MinAmountDnsRecords)
-        rules=IL_getRuleset(ARecords,DEBUGSQL)
+        ARecords=getDNSData(MinAmountDnsRecords,publicZones=config['publicZones'])
+        rules=IL_getRuleset(ARecords,DEBUGSQL,config=config)
     
     ZPA_addAppPerRule(rules)
     ZPA_addIPL()
@@ -836,9 +871,10 @@ class RedirectStdStreams(object):
 DEBUG=False
 
 if __name__ == '__main__':
-    if DEBUG==None or DEBUG==False:
-        devnull = open('error.log', 'w')
-        with RedirectStdStreams(stderr=devnull):
-            main()
-    else:
-        main()
+    main()
+    #if DEBUG==None or DEBUG==False:
+    #    devnull = open('error.log', 'w')
+    #    with RedirectStdStreams(stderr=devnull):
+    #        main()
+    #else:
+    #    main()
