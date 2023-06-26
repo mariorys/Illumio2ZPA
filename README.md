@@ -15,6 +15,12 @@ Treat Illumio as source of truth for creating / updating the list of application
            add logging to a file
        
       0.93 fixed error checkOverlappingPorts where the last Port in the list was omitted
+      0.94  fixup multiple IPLs matching at DNS mapping
+            added "publicZones" to config, domains to look for public published fqdns to skip from adding.
+      0.95  re-lookup CNAMEs that might be nested or were unresolved for whatever reason before
+      0.96  optimized "special IPL" & dns cleanup code
+           added FQDNs to collect from Illumio in IPls, these take precedence over learned / resolved IPs - these are remove before the mapping sequence
+      0.97  hashed out "nearest app connector" logic as it reduces redundancy if the app connector(s) fail or site admins get creative
 
 #
 Note:
